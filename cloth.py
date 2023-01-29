@@ -1,6 +1,8 @@
 import taichi as ti
 ti.init(arch=ti.cuda)#ti.vulkan)  # Alternatively, ti.init(arch=ti.cpu)
 
+num_of_balls = 1
+
 n = 128
 quad_size = 1.0 / n
 dt = 4e-2 / n
@@ -13,7 +15,12 @@ drag_damping = 1
 
 ball_radius = 0.3
 ball_center = ti.Vector.field(3, dtype=float, shape=(1, ))
-ball_center[0] = [0, 0, 0]
+ball_center[0] = [-0.11 if num_of_balls == 2 else 0, 0, 0]
+
+ball1_radius = 0.1
+ball1_center = ti.Vector.field(3, dtype=float, shape=(1, ))
+ball1_center[0] = [0.29, 0.1, 0]
+
 
 x = ti.Vector.field(3, dtype=float, shape=(n, n)) # cloth positions
 v = ti.Vector.field(3, dtype=float, shape=(n, n)) # cloth velocity
@@ -100,6 +107,14 @@ def substep():
             # Velocity projection
             normal = offset_to_center.normalized()
             v[i] -= ti.min(v[i].dot(normal), 0) * normal
+
+        if num_of_balls == 2:
+            offset_to_center = x[i] - ball1_center[0]
+            if offset_to_center.norm() <= ball1_radius:
+                # Velocity projection
+                normal = offset_to_center.normalized()
+                v[i] -= ti.min(v[i].dot(normal), 0) * normal
+
         x[i] += dt * v[i]
 
 @ti.kernel
@@ -146,5 +161,7 @@ while window.running:
 
     # Draw a smaller ball to avoid visual penetration
     scene.particles(ball_center, radius=ball_radius * 0.95, color=(0.5, 0.42, 0.8))
+    if num_of_balls == 2:
+        scene.particles(ball1_center, radius=ball1_radius * 0.95, color=(0.8, 0.42, 0.8))
     canvas.scene(scene)
     window.show()
