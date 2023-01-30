@@ -57,17 +57,73 @@ rollout_path = f'{root}/cloth_data.pkl'
 def main(unused_argv):
 
   if rollout_path.endswith(".pkl"):
-    render_rollout(rollout_path)
+    render_rollout_2d(rollout_path)
     return
 
   # loop through the rollout_path folder, and render_rollout for each file
   for file in os.listdir(rollout_path):
     if file.endswith(".pkl"):
-      render_rollout(rollout_path + file)
+      render_rollout_2d(rollout_path + file)
     else:
       continue
 
-def render_rollout(rollout_path):
+def render_rollout_3d(rollout_path):
+  with open(rollout_path, "rb") as file:
+    rollout_data = pickle.load(file)
+
+  fig = plt.figure(figsize=(20, 10))
+  axes = fig.add_subplot(projection="3d")
+  axes.set(xlim3d=(-0.5, 0.5), xlabel='X')
+  axes.set(ylim3d=(-0.5, 0.5), ylabel='Y')
+  axes.set(zlim3d=(-0.5, 0.5), zlabel='Z')
+
+  plot_info = []
+  path = f"{root}/vtk"       
+  if not os.path.exists(path):
+    os.makedirs(path)
+  for i in range(len(rollout_data)):
+    arr = rollout_data[i]
+    if arr.shape[2] == 2:
+      arr = np.concatenate([arr, np.zeros((arr.shape[0], arr.shape[1], 1))], axis=2)
+    coords0 = arr[0]
+    for j in range(len(arr)):
+      coords = arr[j]
+      disp = np.linalg.norm(coords - coords0, axis=1)
+      pointsToVTK(f"{path}/points{j}", np.array(coords[:, 0]), 
+                                       np.array(coords[:, 1]), 
+                                       np.array(coords[:, 2]), 
+                                       data = {"displacement" : disp})   
+    # Append the initial positions to get the full trajectory.
+    trajectory = arr
+    ax = axes
+    points = {
+        particle_type: ax.plot([], [], [], ".", ms=2, color=color)[0]
+        for particle_type, color in TYPE_TO_COLOR.items()
+      }
+    plot_info.append((ax, trajectory, points))
+
+    num_steps = trajectory.shape[0]
+
+    def update(step_i):
+      outputs = []
+      for _, trajectory, points in plot_info:
+        for particle_type, line in points.items():
+          mask = 0#rollout_data["particle_types"] == particle_type
+          line.set_data(trajectory[step_i, :, 0], trajectory[step_i, :, 1])
+          line.set_3d_properties(trajectory[step_i, :, 1])
+          outputs.append(line)
+      return outputs
+
+    unused_animation = animation.FuncAnimation(
+        fig, update,
+        frames=np.arange(0, num_steps, FLAGS.step_stride), interval=10)
+
+    gif_name = rollout_path[:-4] + ".gif"
+    unused_animation.save(gif_name, dpi=80, fps=30, writer='imagemagick')
+    plt.show(block=FLAGS.block_on_show)
+
+
+def render_rollout_2d(rollout_path):
   with open(rollout_path, "rb") as file:
     rollout_data = pickle.load(file)
 
