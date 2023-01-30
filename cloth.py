@@ -1,25 +1,35 @@
 import taichi as ti
+import numpy as np
+import pickle
 ti.init(arch=ti.cuda)#ti.vulkan)  # Alternatively, ti.init(arch=ti.cpu)
 
+trajectory_duration = 1.5
+gravity = 9.8
+total_iterations = 1
+
 num_of_balls = 1
+r0 = 0.3
+r1 = 0.1
+dist = 0.25
+offset = -0.1
+x0 = -(r0+r1+dist)/2 + r0/2 + offset
+x1 = (r0+r1+dist)/2 + r1/2 + offset
 
 n = 128
 quad_size = 1.0 / n
 dt = 4e-2 / n
 substeps = int(1 / 60 // dt)
 
-gravity = ti.Vector([0, -9.8, 0])
+gravity = ti.Vector([0, -gravity, 0])
 spring_Y = 3e4
 dashpot_damping = 1e4
 drag_damping = 1
 
-ball_radius = 0.3
 ball_center = ti.Vector.field(3, dtype=float, shape=(1, ))
-ball_center[0] = [-0.11 if num_of_balls == 2 else 0, 0, 0]
+ball_center[0] = [x0 if num_of_balls == 2 else 0, 0, 0]
 
-ball1_radius = 0.1
 ball1_center = ti.Vector.field(3, dtype=float, shape=(1, ))
-ball1_center[0] = [0.29, 0.1, 0]
+ball1_center[0] = [x1, 0.1, 0]
 
 
 x = ti.Vector.field(3, dtype=float, shape=(n, n)) # cloth positions
@@ -38,7 +48,7 @@ def initialize_mass_points():
 
     for i, j in x:
         x[i, j] = [
-            i * quad_size - 0.5 + random_offset[0], 0.6,# + 0.002*i tile the cloth
+            i * quad_size - 0.5 + random_offset[0], 0.6,# + 0.002*i, # tile the cloth
             j * quad_size - 0.5 + random_offset[1]
         ]
         v[i, j] = [0, 0, 0] #[0,1,0]: move up at first
@@ -103,14 +113,14 @@ def substep():
     for i in ti.grouped(x):
         v[i] *= ti.exp(-drag_damping * dt)
         offset_to_center = x[i] - ball_center[0]
-        if offset_to_center.norm() <= ball_radius:
+        if offset_to_center.norm() <= r0:
             # Velocity projection
             normal = offset_to_center.normalized()
             v[i] -= ti.min(v[i].dot(normal), 0) * normal
 
         if num_of_balls == 2:
             offset_to_center = x[i] - ball1_center[0]
-            if offset_to_center.norm() <= ball1_radius:
+            if offset_to_center.norm() <= r1:
                 # Velocity projection
                 normal = offset_to_center.normalized()
                 v[i] -= ti.min(v[i].dot(normal), 0) * normal
@@ -132,12 +142,22 @@ camera = ti.ui.Camera()
 current_t = 0.0
 initialize_mass_points()
 np_list = []
-
+np_arr = np.empty([0, n**2, 3])
+iterations = 0
 while window.running:
-    if current_t > 1.5:
+    if current_t > trajectory_duration:
         # Reset
         initialize_mass_points()
-        current_t = 0
+        current_t = 0      
+        np_list.append(np_arr)
+        np_arr = np.empty([0, n**2, 3])
+
+        iterations += 1
+        if iterations >= total_iterations:
+            #save np_list to pickle file
+            with open('data/cloth_data.pkl', 'wb') as f:
+                pickle.dump(np_list, f)
+            break
 
     for i in range(substeps):
         substep()
@@ -145,6 +165,7 @@ while window.running:
     update_vertices()
 
     camera.position(0.0, 0.0, 3)
+    # camera.position(0.0, 0.0, 3)
     camera.lookat(0.0, 0.0, 0)
     scene.set_camera(camera)
 
@@ -155,13 +176,11 @@ while window.running:
                per_vertex_color=colors,
                two_sided=True)
 
-    np_list.append(vertices.to_numpy())
-    if len(np_list) % 30 == 0:
-        pass
+    np_arr = np.insert(np_arr, np_arr.shape[0], vertices.to_numpy(), axis=0)
 
     # Draw a smaller ball to avoid visual penetration
-    scene.particles(ball_center, radius=ball_radius * 0.95, color=(0.5, 0.42, 0.8))
+    scene.particles(ball_center, radius=r0 * 0.95, color=(0.5, 0.42, 0.8))
     if num_of_balls == 2:
-        scene.particles(ball1_center, radius=ball1_radius * 0.95, color=(0.8, 0.42, 0.8))
+        scene.particles(ball1_center, radius=r1 * 0.95, color=(0.8, 0.42, 0.8))
     canvas.scene(scene)
     window.show()
