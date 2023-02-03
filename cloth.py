@@ -3,9 +3,9 @@ import numpy as np
 import pickle
 ti.init(arch=ti.cuda)#ti.vulkan)  # Alternatively, ti.init(arch=ti.cpu)
 
-trajectory_duration = 1.5
-gravity = 9.8
-total_iterations = 1
+trajectory_duration = 2.5
+gravity = 4.9#9.8
+total_iterations = 5
 
 num_of_balls = 1
 r0 = 0.3
@@ -16,6 +16,7 @@ x0 = -(r0+r1+dist)/2 + r0/2 + offset
 x1 = (r0+r1+dist)/2 + r1/2 + offset
 
 n = 128
+sample_count = 4
 quad_size = 1.0 / n
 dt = 4e-2 / n
 substeps = int(1 / 60 // dt)
@@ -41,6 +42,19 @@ vertices = ti.Vector.field(3, dtype=float, shape=n * n)
 colors = ti.Vector.field(3, dtype=float, shape=n * n)
 
 bending_springs = False
+
+def build_sample_index(sc):
+    '''
+    sc: sample count, 1 means all points, 2 means half points, 4 means quarter points
+    '''
+    tmp = np.zeros((n*n, 3), dtype=np.int32)
+    for i in range(n*n):
+        tmp[i] = [i, i//n, i%n]
+
+    sample_index = [i[0] for i in tmp if i[1] % sc == 0 and i[2] % sc == 0]
+    return sample_index
+
+sample_index = build_sample_index(sample_count)
 
 @ti.kernel
 def initialize_mass_points():
@@ -142,20 +156,21 @@ camera = ti.ui.Camera()
 current_t = 0.0
 initialize_mass_points()
 np_list = []
-np_arr = np.empty([0, n**2, 3])
+np_arr = np.empty([0, int(n/sample_count)**2, 3])
 iterations = 0
+particle_type = np.full((int(n/sample_count)**2), 5)
 while window.running:
     if current_t > trajectory_duration:
         # Reset
         initialize_mass_points()
         current_t = 0      
-        np_list.append(np_arr)
-        np_arr = np.empty([0, n**2, 3])
+        np_list.append((f'cloth_trajectory_{iterations}', [np_arr, particle_type]))
+        np_arr = np.empty([0, int(n/sample_count)**2, 3])
 
         iterations += 1
         if iterations >= total_iterations:
             #save np_list to pickle file
-            with open('data/cloth_data.pkl', 'wb') as f:
+            with open('data/train.npz', 'wb') as f:
                 pickle.dump(np_list, f)
             break
 
@@ -176,7 +191,12 @@ while window.running:
                per_vertex_color=colors,
                two_sided=True)
 
-    np_arr = np.insert(np_arr, np_arr.shape[0], vertices.to_numpy(), axis=0)
+    vertices_np = vertices.to_numpy()
+    if sample_count != 1:
+        # retrieve even indices from vertices_np
+        vertices_np = np.take(vertices_np, sample_index, axis=0)
+
+    np_arr = np.insert(np_arr, np_arr.shape[0], vertices_np, axis=0)
 
     # Draw a smaller ball to avoid visual penetration
     scene.particles(ball_center, radius=r0 * 0.95, color=(0.5, 0.42, 0.8))

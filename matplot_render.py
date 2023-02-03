@@ -53,23 +53,28 @@ TYPE_TO_COLOR = {
 }
 
 root = 'D:/Stanford/Taichi/data'
-rollout_path = f'{root}/cloth_data.pkl'
+rollout_path = f'{root}/train.npz'
 def main(unused_argv):
 
-  if rollout_path.endswith(".pkl"):
+  if rollout_path.endswith(".npz"):
     render_rollout_2d(rollout_path)
     return
 
   # loop through the rollout_path folder, and render_rollout for each file
   for file in os.listdir(rollout_path):
-    if file.endswith(".pkl"):
+    if file.endswith(".npz"):
       render_rollout_2d(rollout_path + file)
     else:
       continue
 
+def load_rollout(file):
+  rollout_data = pickle.load(file)  
+  # return rollout_data[0][1][0]
+  return [i[1][0] for i in rollout_data]
+
 def render_rollout_3d(rollout_path):
   with open(rollout_path, "rb") as file:
-    rollout_data = pickle.load(file)
+    rollout_data = load_rollout(file)
 
   fig = plt.figure(figsize=(20, 10))
   axes = fig.add_subplot(projection="3d")
@@ -125,7 +130,7 @@ def render_rollout_3d(rollout_path):
 
 def render_rollout_2d(rollout_path):
   with open(rollout_path, "rb") as file:
-    rollout_data = pickle.load(file)
+    rollout_data = load_rollout(file)
 
   fig, axes = plt.subplots(1, 2, figsize=(20, 10))
 
