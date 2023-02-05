@@ -1,22 +1,24 @@
 import taichi as ti
 import numpy as np
 import pickle
+from statistics import mean
+import json
 ti.init(arch=ti.cuda)#ti.vulkan)  # Alternatively, ti.init(arch=ti.cpu)
-
-trajectory_duration = 2.5
-gravity = 4.9#9.8
-total_iterations = 5
+save_to_folder = "//wsl.localhost/Ubuntu-20.04/home/ming/dev/gns/data/cloth"
+trajectory_duration = 4#1.5
+gravity = 2#9.8
+total_iterations = 200
 
 num_of_balls = 1
 r0 = 0.3
 r1 = 0.1
-dist = 0.25
+dist = 0.25 #distance between two balls
 offset = -0.1
 x0 = -(r0+r1+dist)/2 + r0/2 + offset
 x1 = (r0+r1+dist)/2 + r1/2 + offset
 
 n = 128
-sample_count = 4
+down_sample_count = 4
 quad_size = 1.0 / n
 dt = 4e-2 / n
 substeps = int(1 / 60 // dt)
@@ -54,7 +56,7 @@ def build_sample_index(sc):
     sample_index = [i[0] for i in tmp if i[1] % sc == 0 and i[2] % sc == 0]
     return sample_index
 
-sample_index = build_sample_index(sample_count)
+sample_index = build_sample_index(down_sample_count)
 
 @ti.kernel
 def initialize_mass_points():
@@ -62,7 +64,7 @@ def initialize_mass_points():
 
     for i, j in x:
         x[i, j] = [
-            i * quad_size - 0.5 + random_offset[0], 0.6,# + 0.002*i, # tile the cloth
+            i * quad_size - 0.5 + random_offset[0], 0.6,# + 0.002*i, # angle the cloth
             j * quad_size - 0.5 + random_offset[1]
         ]
         v[i, j] = [0, 0, 0] #[0,1,0]: move up at first
@@ -156,22 +158,101 @@ camera = ti.ui.Camera()
 current_t = 0.0
 initialize_mass_points()
 np_list = []
-np_arr = np.empty([0, int(n/sample_count)**2, 3])
+np_arr = np.empty([0, int(n/down_sample_count)**2, 3])
 iterations = 0
-particle_type = np.full((int(n/sample_count)**2), 5)
+particle_type = np.full((int(n/down_sample_count)**2), 5)
+
+def save_metadata(trajectory_duration, r0, ball_center, np_list):
+    sequence_length = mean([len(i[1][0]) for i in np_list]) - 5
+    dt = trajectory_duration / sequence_length
+
+    mean_v = []
+    std_v = []
+    mean_a = []
+    std_a = []
+    for item in np_list:
+        trajectory = item[1][0]
+                # calculate displacement of x,y,z
+        v_l = []
+        a_l = []
+        for i in range(1, trajectory.shape[0]):
+            displacement = trajectory[i] - trajectory[i-1]
+            velocity = displacement / dt
+            if len(v_l) > 0:
+                acceleration = (velocity - v_l[-1]) / dt
+                a_l.append(acceleration)
+
+            v_l.append(velocity)
+        mean_v.append(np.mean(v_l, axis=(0,1)))
+        mean_a.append(np.mean(a_l, axis=(0,1)))
+        std_v.append(np.std(v_l, axis=(0,1)))
+        std_a.append(np.std(a_l, axis=(0,1)))
+
+    vel_mean = np.mean(mean_v, axis=(0))
+    vel_std = np.mean(std_v, axis=(0))
+    acc_mean = np.mean(mean_a, axis=(0))
+    acc_std = np.mean(std_a, axis=(0))
+
+    #save meta data
+    meta_data = {
+                "bounds": [
+                    [-1, 1],
+                    [-1, 1],
+                    [-1, 1]
+                ],
+                "balls":[
+                    [ball_center[0][0], ball_center[0][1], ball_center[0][2], r0],
+                ],
+                "dt": dt,
+                "dim": 3,
+                "sequence_length": sequence_length,
+                "default_connectivity_radius": quad_size * down_sample_count,
+                "neighbour_search_size": 2,
+                "vel_mean": [   
+                    vel_mean[0],
+                    vel_mean[1],
+                    vel_mean[2]            
+                ],
+                "vel_std": [
+                    vel_std[0],
+                    vel_std[1],
+                    vel_std[2]
+                ],
+                "acc_mean": [
+                    acc_mean[0],
+                    acc_mean[1],
+                    acc_mean[2]
+                ],
+                "acc_std": [
+                    acc_std[0],
+                    acc_std[1],
+                    acc_std[2]
+                ]
+            }
+
+            #save np_list to pickle file
+    with open(f'{save_to_folder}/metadata.json', 'w') as f:
+        json.dump(meta_data, f)
+    return dt
+
 while window.running:
     if current_t > trajectory_duration:
         # Reset
         initialize_mass_points()
         current_t = 0      
         np_list.append((f'cloth_trajectory_{iterations}', [np_arr, particle_type]))
-        np_arr = np.empty([0, int(n/sample_count)**2, 3])
+        np_arr = np.empty([0, int(n/down_sample_count)**2, 3])
 
         iterations += 1
         if iterations >= total_iterations:
-            #save np_list to pickle file
-            with open('data/train.npz', 'wb') as f:
-                pickle.dump(np_list, f)
+            dt = save_metadata(trajectory_duration, r0, ball_center, np_list)
+
+            with open(f'{save_to_folder}/train.npz', 'wb') as f:
+                pickle.dump(np_list[:int(total_iterations*0.8)], f)
+            with open(f'{save_to_folder}/valid.npz', 'wb') as f:
+                pickle.dump(np_list[int(total_iterations*0.8):int(total_iterations*0.9)], f)
+            with open(f'{save_to_folder}/test.npz', 'wb') as f:
+                pickle.dump(np_list[-int(total_iterations*0.1):], f)
             break
 
     for i in range(substeps):
@@ -192,7 +273,7 @@ while window.running:
                two_sided=True)
 
     vertices_np = vertices.to_numpy()
-    if sample_count != 1:
+    if down_sample_count != 1:
         # retrieve even indices from vertices_np
         vertices_np = np.take(vertices_np, sample_index, axis=0)
 
