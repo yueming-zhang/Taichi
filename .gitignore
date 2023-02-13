@@ -1,2 +1,5 @@
 .venv/
 data/
+data_exp_17/
+data_300/
+cloth_train_records/

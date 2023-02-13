@@ -52,7 +52,9 @@ TYPE_TO_COLOR = {
     5: "blue",  # Water.
 }
 
-root = 'D:/Stanford/Taichi/data'
+root = 'D:/Stanford/Taichi/data1'
+# root = "//wsl.localhost/Ubuntu-20.04/home/ming/dev/gns/data/cloth"
+
 rollout_path = f'{root}/train.npz'
 def main(unused_argv):
 

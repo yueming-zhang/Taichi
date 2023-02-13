@@ -3,11 +3,16 @@ import numpy as np
 import pickle
 from statistics import mean
 import json
+from  spherical_points import generate_sphere_points, get_sphere_points
+
 ti.init(arch=ti.cuda)#ti.vulkan)  # Alternatively, ti.init(arch=ti.cpu)
-save_to_folder = "//wsl.localhost/Ubuntu-20.04/home/ming/dev/gns/data/cloth"
-trajectory_duration = 4#1.5
-gravity = 2#9.8
-total_iterations = 200
+# save_to_folder = "//wsl.localhost/Ubuntu-20.04/home/ming/dev/gns/data/cloth"
+save_to_folder = "data"
+trajectory_duration = 2.5#1.5
+mass_initial_height = 0.6
+mass_initial_velocity = -2
+gravity = 1#9.8
+total_iterations = 300
 
 num_of_balls = 1
 r0 = 0.3
@@ -22,6 +27,9 @@ down_sample_count = 4
 quad_size = 1.0 / n
 dt = 4e-2 / n
 substeps = int(1 / 60 // dt)
+include_ball = True
+ball_density = quad_size * down_sample_count
+
 
 gravity = ti.Vector([0, -gravity, 0])
 spring_Y = 3e4
@@ -60,14 +68,14 @@ sample_index = build_sample_index(down_sample_count)
 
 @ti.kernel
 def initialize_mass_points():
-    random_offset = ti.Vector([ti.random() - 0.5, ti.random() - 0.5]) * 0.1
+    random_offset = ti.Vector([ti.random() - 0.5, ti.random() - 0.5]) * 0.02
 
     for i, j in x:
         x[i, j] = [
-            i * quad_size - 0.5 + random_offset[0], 0.6,# + 0.002*i, # angle the cloth
+            i * quad_size - 0.55 + random_offset[0], mass_initial_height,# + 0.002*i, # angle the cloth
             j * quad_size - 0.5 + random_offset[1]
         ]
-        v[i, j] = [0, 0, 0] #[0,1,0]: move up at first
+        v[i, j] = [0, mass_initial_velocity, 0] #[0,1,0]: move up at first
 
 
 @ti.kernel
@@ -160,7 +168,12 @@ initialize_mass_points()
 np_list = []
 np_arr = np.empty([0, int(n/down_sample_count)**2, 3])
 iterations = 0
+spherical_surface_points = get_sphere_points(r0, ball_density)
+spherical_surface_particle_type = np.full(len(spherical_surface_points), 3)
+
 particle_type = np.full((int(n/down_sample_count)**2), 5)
+if include_ball:
+    particle_type = np.concatenate((particle_type, spherical_surface_particle_type))
 
 def save_metadata(trajectory_duration, r0, ball_center, np_list):
     sequence_length = mean([len(i[1][0]) for i in np_list]) - 5
@@ -206,12 +219,15 @@ def save_metadata(trajectory_duration, r0, ball_center, np_list):
                 "dt": dt,
                 "dim": 3,
                 "sequence_length": sequence_length,
-                "default_connectivity_radius": quad_size * down_sample_count,
-                "neighbour_search_size": 2,
+                "default_connectivity_radius": quad_size * down_sample_count * 1.5,
+                "cloth_width": int(n / down_sample_count),
+                "radius_in_quad": 1.5,
+                "quad_size": quad_size * down_sample_count,
+                "neighbour_search_size": 1.5,
                 "vel_mean": [   
-                    vel_mean[0],
-                    vel_mean[1],
-                    vel_mean[2]            
+                    0,
+                    0,#vel_mean[1],
+                    0,         
                 ],
                 "vel_std": [
                     vel_std[0],
@@ -219,9 +235,9 @@ def save_metadata(trajectory_duration, r0, ball_center, np_list):
                     vel_std[2]
                 ],
                 "acc_mean": [
-                    acc_mean[0],
+                    0,
                     acc_mean[1],
-                    acc_mean[2]
+                    0
                 ],
                 "acc_std": [
                     acc_std[0],
@@ -240,6 +256,13 @@ while window.running:
         # Reset
         initialize_mass_points()
         current_t = 0      
+        p = np.array(spherical_surface_points)
+        #reshape ,repeat p, and append to np_arr
+        p = np.reshape(p, (1, p.shape[0], p.shape[1]))
+        p = np.repeat(p, len(np_arr), axis=0)
+        if include_ball:
+            np_arr = np.concatenate((np_arr, p), axis=1)
+
         np_list.append((f'cloth_trajectory_{iterations}', [np_arr, particle_type]))
         np_arr = np.empty([0, int(n/down_sample_count)**2, 3])
 
@@ -248,11 +271,11 @@ while window.running:
             dt = save_metadata(trajectory_duration, r0, ball_center, np_list)
 
             with open(f'{save_to_folder}/train.npz', 'wb') as f:
-                pickle.dump(np_list[:int(total_iterations*0.8)], f)
+                pickle.dump(np_list[:int(total_iterations*0.9)], f)
             with open(f'{save_to_folder}/valid.npz', 'wb') as f:
-                pickle.dump(np_list[int(total_iterations*0.8):int(total_iterations*0.9)], f)
+                pickle.dump(np_list[int(total_iterations*0.9):int(total_iterations*0.95)], f)
             with open(f'{save_to_folder}/test.npz', 'wb') as f:
-                pickle.dump(np_list[-int(total_iterations*0.1):], f)
+                pickle.dump(np_list[-int(total_iterations*0.05):], f)
             break
 
     for i in range(substeps):
